@@ -117,7 +117,7 @@ def main():
 
     bg_w, bg_h = background_img.size
 
-    number_of_emojis = 101
+    number_of_emojis = 6
 
     if MODE == Modes.RANDOM_POSITION:
         coordinates, (emoji_width, emoji_height) = gen_offsets_random(
