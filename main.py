@@ -227,11 +227,11 @@ def on_button(update: Update, context: CallbackContext, captcha: EmojiCaptcha):
             return captcha
         elif captcha.remaining_attempts() == 0:
             new_text = "You are no longer allowed to make mistakes"
-            update.callback_query.answer(f"Error!")
+            update.callback_query.answer(f"Wrong emoji!")
         else:
             s_or_not = "s" if captcha.remaining_attempts() > 1 else ""
             new_text = f"You are still allowed {captcha.remaining_attempts()} error{s_or_not}"
-            update.callback_query.answer(f"Error!")
+            update.callback_query.answer(f"Wrong emoji!")
 
     reply_markup = captcha.get_reply_markup()
     if new_text:
