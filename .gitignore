@@ -1,3 +1,6 @@
 venv/
 idea/
 .idea/
+config.toml
+*.log
+*.log.*

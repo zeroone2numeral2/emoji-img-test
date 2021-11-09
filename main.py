@@ -1,159 +1,270 @@
-import math
+import datetime
+import json
+import logging
+import logging.config
 import os
-from random import randint, choice
-from pathlib import Path
+import random
+import re
+from functools import wraps
+from random import choice
+from typing import List
 
-from PIL import Image
+from telegram import Update, TelegramError, Chat, ParseMode, Bot, BotCommandScopeAllPrivateChats, BotCommand, User, \
+    InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest
+from telegram.ext import Updater, CommandHandler, CallbackContext, Filters, MessageHandler, CallbackQueryHandler
+from telegram.utils import helpers
+
+from emojis import Emojis, EmojiButton
+import utilities
+from mwt import MWT
+from config import config
+
+emojis = Emojis(max_codepoints=1)
 
 
-emojis = [file_name for file_name in os.listdir("emojis")]
+def load_logging_config(file_name='logging.json'):
+    with open(file_name, 'r') as f:
+        logging_config = json.load(f)
 
-background_img = Image.open('bg.jpg', 'r').convert('RGBA').resize((740, 740), Image.ANTIALIAS)
-
-
-class Modes:
-    RANDOM_POSITION = 1
-    GRID = 2
+    logging.config.dictConfig(logging_config)
 
 
-MODE = 2
+load_logging_config("logging.json")
+
+logger = logging.getLogger(__name__)
 
 
-def gen_offsets_grid(img_width: int, img_height: int, number_of_emojis: int, cell_padding: int = 10):
-    grid_x, grid_y = 1, 1
-    while True:
-        if grid_x * grid_y >= number_of_emojis:
-            break
+@MWT(timeout=60 * 60)
+def get_admin_ids(bot: Bot, chat_id: int):
+    return [admin.user.id for admin in bot.get_chat_administrators(chat_id)]
+
+
+def administrators(func):
+    @wraps(func)
+    def wrapped(update: Update, context: CallbackContext, *args, **kwargs):
+        if update.effective_user.id not in get_admin_ids(context.bot, update.effective_chat.id):
+            logger.debug("admin check failed")
+            return
+
+        return func(update, context, *args, **kwargs)
+
+    return wrapped
+
+
+def fail_with_message(answer_to_message=True):
+    def real_decorator(func):
+        @wraps(func)
+        def wrapped(update: Update, context: CallbackContext, *args, **kwargs):
+            try:
+                return func(update, context, *args, **kwargs)
+            except Exception as e:
+                error_str = str(e)
+                logger.error('error while running callback: %s', error_str, exc_info=True)
+                if answer_to_message:
+                    update.message.reply_text("error")
+
+        return wrapped
+    return real_decorator
+
+
+def get_captcha():
+    def real_decorator(func):
+        @wraps(func)
+        def wrapped(update: Update, context: CallbackContext, *args, **kwargs):
+            if not (update.effective_user.id in context.chat_data and "captcha" in context.chat_data[update.effective_user.id]):
+                update.callback_query.answer("Captcha expired")
+                utilities.safe_delete(update.callback_query.message)
+
+                context.chat_data.pop(update.effective_user.id, None)
+                return
+
+            captcha = context.chat_data[update.effective_user.id]["captcha"]
+
+            if captcha.user_id != update.effective_user.id:
+                update.callback_query.answer("You are not supposed to solve this captcha", show_alert=True)
+                return
+
+            result_captcha = func(update, context, captcha, *args, **kwargs)
+            if result_captcha:
+                result_captcha.updated_on = utilities.now_utc()
+                context.chat_data[update.effective_user.id]["captcha"] = result_captcha
+
+        return wrapped
+    return real_decorator
+
+
+class EmojiCaptcha:
+    def __init__(
+            self,
+            user: User,
+            chat: Chat,
+            number_of_correct_emojis: int,  # number of emojis in the image (that are marked as correct in the keyboard)
+            number_of_buttons: int = 8,  # number of keyboard buttons
+            allowed_errors: int = 2  # number of errors the user is allowed to do
+    ):
+        if number_of_buttons % 2 != 0:
+            raise ValueError("the number of buttons must be even")
+
+        self.user_id = user.id
+        self.chat_id = chat.id
+        self.number_of_correct_emojis = number_of_correct_emojis
+        self.number_of_buttons = number_of_buttons
+        self.errors = 0
+        self.allowed_errors = allowed_errors
+
+        now = utilities.now_utc()
+        self.created_on = now
+        self.updated_on = now
+
+        self.emojis: List[EmojiButton] = []
+
+        self.gen_emojis()
+
+    def gen_emojis(self):
+        random_emojis = emojis.random(count=self.number_of_buttons)
+
+        self.emojis = [EmojiButton.convert(e) for e in random_emojis]
+
+        for i in range(self.number_of_correct_emojis):
+            # mark the first emojis as correct, then we will shuffle the list
+            self.emojis[i].correct = True
+
+        random.shuffle(self.emojis)
+
+    def get_reply_markup(self, rows=2):
+        if not self.emojis:
+            self.gen_emojis()
+
+        keyboard = []
+        # max two lines of emojis
+        buttons_per_row = int(self.number_of_buttons / rows)
+        i = 0
+        for row_number in range(rows):
+            buttons_row = []
+            for column_number in range(buttons_per_row):
+                emoji = self.emojis[i]
+                button = InlineKeyboardButton(emoji.unicode, callback_data=emoji.callback_data)
+
+                buttons_row.append(button)
+                i += 1
+
+            keyboard.append(buttons_row)
+
+        return InlineKeyboardMarkup(keyboard)
+
+    def add_error(self, errors_to_add=1):
+        self.errors += errors_to_add
+        return self.errors
+
+    def remaining_attempts(self):
+        return self.allowed_errors - self.errors
+
+    def correct_answers(self):
+        return sum(e.already_selected and e.correct for e in self.emojis)
+
+    def get_emoji(self, hex_str):
+        for emoji in self.emojis:
+            if emoji.id == hex_str:
+                return emoji
+
+        raise ValueError(f"hex codepoints not found: {hex_str}")
+
+    def mark_as_selected(self, hex_str):
+        for i, emoji in enumerate(self.emojis):
+            if emoji.id == hex_str:
+                self.emojis[i].already_selected = True
+                return
+
+        raise ValueError(f"hex codepoints not found: {hex_str}")
+
+    def __str__(self):
+        emojis_list = [f"EmojiButton(id={e.id})" for e in self.emojis]
+        emojis_string = "\n\t".join(emojis_list)
+
+        return f"EmojiCaptcha(\n\t{emojis_string}\n)"
+
+
+@fail_with_message()
+def on_private_chat_message(update: Update, context: CallbackContext):
+    logger.debug("new captcha for %d", update.effective_user.id)
+
+    captcha = EmojiCaptcha(
+        update.effective_user,
+        update.effective_chat,
+        number_of_correct_emojis=3,
+        number_of_buttons=10,
+    )
+    update.message.reply_text(f"You are allowed {captcha.remaining_attempts()} error(s) and 10 minutes to solve the test", reply_markup=captcha.get_reply_markup())
+
+    context.chat_data[update.effective_user.id] = {"captcha": captcha}
+
+
+@fail_with_message(answer_to_message=False)
+@get_captcha()
+def on_already_selected_button(update: Update, context: CallbackContext, captcha: EmojiCaptcha):
+    update.callback_query.answer("You already selected this emoji", show_alert=True)
+
+
+@fail_with_message(answer_to_message=False)
+@get_captcha()
+def on_button(update: Update, context: CallbackContext, captcha: EmojiCaptcha):
+    emoji_id = context.match[1]
+    logger.info("user selected emoji: %s", emoji_id)
+
+    emoji = captcha.get_emoji(emoji_id)
+    logger.debug("emoji: %s (correct: %s)", emoji.codepoints_hex, emoji.correct)
+
+    captcha.mark_as_selected(emoji.id)
+
+    new_text = ""
+    if emoji.correct:
+        update.callback_query.answer(f"Good job! {captcha.number_of_correct_emojis - captcha.correct_answers()} to go")
+    else:
+        errors = captcha.add_error()
+        if errors > captcha.allowed_errors:
+            update.callback_query.edit_message_text(f"Too many errors ({errors})", reply_markup=None)
+            return captcha
+        elif captcha.remaining_attempts() == 0:
+            new_text = "You are no longer allowed to make mistakes"
+            update.callback_query.answer(f"Error!")
         else:
-            if grid_x <= grid_y:
-                grid_x += 1
-            else:
-                grid_y += 1
+            s_or_not = "s" if captcha.remaining_attempts() > 1 else ""
+            new_text = f"You are still allowed {captcha.remaining_attempts()} error{s_or_not}"
+            update.callback_query.answer(f"Error!")
 
-    print(f"grid side for {number_of_emojis} emojis: {grid_x}x{grid_y}")
+    reply_markup = captcha.get_reply_markup()
+    if new_text:
+        update.callback_query.edit_message_text(new_text, reply_markup=reply_markup)
+    else:
+        update.callback_query.edit_message_reply_markup(reply_markup=reply_markup)
 
-    cell_w = math.floor(img_width / grid_x)
-    cell_h = math.floor(img_height / grid_y)
-    print(f"cells side (width: {img_width}): {grid_x} x {cell_w} = {grid_x*cell_w}")
-    print(f"cells side (height: {img_height}): {grid_y} x {cell_h} = {grid_y*cell_h}")
-
-    emoji_w = cell_w - (cell_padding * 2)
-    emoji_h = cell_h - (cell_padding * 2)
-    print(f"emojis size: {emoji_w} x {emoji_h}")
-
-    coordinates = []
-    for x in range(grid_x):
-        for y in range(grid_y):
-            offset_x = (cell_w * x) + cell_padding
-            offset_y = (cell_h * y) + cell_padding
-
-            print(f"cell {x}x{y}: {offset_x:3}, {offset_y:3}")
-
-            coordinates.append((offset_x, offset_y))
-
-        print("\n", end="")
-
-    return coordinates, (emoji_w, emoji_h)
-
-
-def gen_offset(max_width: int, max_height: int, existing_offsets: list):
-    offset = ()
-
-    # avoid emojis overlapping
-    while not offset:
-        offset_w = randint(0, max_width)
-        offset_h = randint(0, max_height)
-        print(f"\nCANDIDATE: {offset_w}, {offset_h}")
-
-        if not existing_offsets:
-            return offset_w, offset_h
-
-        valid = True
-        for existing_offset_w, existing_offset_h in existing_offsets:
-            threshold = 150
-
-            w_bound_lower = existing_offset_w - threshold
-            w_bound_higher = existing_offset_w + threshold
-
-            h_bound_lower = existing_offset_h - threshold
-            h_bound_higher = existing_offset_h + threshold
-
-            print("", f"testing bounds: {w_bound_lower}-{w_bound_higher}, {h_bound_lower}-{h_bound_higher}")
-
-            if (w_bound_lower < offset_w < w_bound_higher) and (h_bound_lower < offset_h < h_bound_higher):
-                print("", f"DISCARDED offset: ({offset_w}, {offset_h}): too close to ({existing_offset_w}, {existing_offset_h})")
-                valid = False
-                break
-
-        if valid:
-            offset = (offset_w, offset_h)
-            print("", f"offset OK: ({offset_w}, {offset_h})")
-
-            return offset
-
-
-def gen_offsets_random(img_width: int, img_height: int, number_of_emojis: int):
-    new_size = randint(150, 200)
-
-    coordinates = []
-    for i in range(number_of_emojis):
-        # calculate pasting offset
-        max_width = img_width - new_size
-        max_height = img_height - new_size
-
-        offset = gen_offset(max_width, max_height, coordinates)
-        coordinates.append(offset)
-
-    return coordinates, (new_size, new_size)
+    return captcha
 
 
 def main():
-    png_image_path = Path("emojis/") / choice(emojis)
-    png_img = Image.open(png_image_path).convert('RGBA')
-    png_img = png_img.rotate(randint(0, 180))
+    updater = Updater(config.telegram.token, workers=1)
+    dispatcher = updater.dispatcher
 
-    print(background_img.size)
-    print(png_img.size)
+    dispatcher.add_handler(MessageHandler(Filters.chat_type.private, on_private_chat_message))
 
-    bg_w, bg_h = background_img.size
+    dispatcher.add_handler(CallbackQueryHandler(on_already_selected_button, pattern=r'^button:already_(?:solved|error)$'))
+    dispatcher.add_handler(CallbackQueryHandler(on_button, pattern=r'^button:(.*)$'))
 
-    number_of_emojis = 6
+    updater.bot.set_my_commands([])  # make sure the bot doesn't have any command set...
+    updater.bot.set_my_commands(  # ...then set the scope for private chats
+        [
+            BotCommand("start", "get the welcome message"),
+            BotCommand("help", "get the help message")
+        ],
+        scope=BotCommandScopeAllPrivateChats()
+    )
 
-    if MODE == Modes.RANDOM_POSITION:
-        coordinates, (emoji_width, emoji_height) = gen_offsets_random(
-            bg_w, bg_h,
-            number_of_emojis=number_of_emojis,
-        )
-    elif MODE == Modes.GRID:
-        coordinates, (emoji_width, emoji_height) = gen_offsets_grid(
-            bg_w, bg_h,
-            number_of_emojis=number_of_emojis,
-            cell_padding=10
-        )
-    else:
-        raise ValueError(f"invalid mode: {MODE}")
+    allowed_updates = ["message", "callback_query"]  # https://core.telegram.org/bots/api#getupdates
 
-    for i, (x, y) in enumerate(coordinates):
-        if i + 1 > number_of_emojis:
-            break
-
-        png_image_path = Path("emojis/") / choice(emojis)
-        png_img = Image.open(png_image_path).convert('RGBA')
-
-        # rotate emoji
-        # rotation might cause the emojis to slightly overlap in the grid, but shouldn't be an issue
-        rotations = (randint(20, 90), randint(290, 360))
-        png_img = png_img.rotate(choice(rotations))
-
-        # resize emoji
-        new_size = randint(emoji_width, emoji_height)
-        png_img = png_img.resize((new_size, new_size), Image.ANTIALIAS)
-
-        background_img.paste(png_img, (x, y), png_img)  # https://stackoverflow.com/a/5324782
-
-    background_img.save('result.png')
+    logger.info("running as @%s, allowed updates: %s", updater.bot.username, allowed_updates)
+    updater.start_polling(drop_pending_updates=True, allowed_updates=allowed_updates)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
-    # gen_offsets_grid(812, 812, 6)
