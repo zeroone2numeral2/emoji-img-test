@@ -405,7 +405,7 @@ def main():
 
     new_group_filter = NewGroup()
     dispatcher.add_handler(MessageHandler(new_group_filter, on_new_group_chat))
-    dispatcher.add_handler(MessageHandler(Filters.regex(r"^/testc"), on_forced_captcha_command))
+    dispatcher.add_handler(MessageHandler(Filters.chat_type.group & Filters.regex(r"^/testc"), on_forced_captcha_command))
     dispatcher.add_handler(MessageHandler(Filters.status_update.new_chat_members & ~new_group_filter, on_new_member))
 
     dispatcher.add_handler(CallbackQueryHandler(on_already_selected_button, pattern=r'^button:already_(?:solved|error)$'))
