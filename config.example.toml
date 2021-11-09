@@ -1,0 +1,9 @@
+[telegram]
+token = "285333393:AAEvoP_Q7BdnvGAjgMW5JZoyeuo0jKvV3Cc"
+admins = []
+exit_unknown_groups = true
+
+[captcha]
+image_emojis = 4 # how many emojis to paste on the image
+allowed_errors = 2 # mistakes an user can do while solving a captcha (allowed_errors + 1 -> test failed)
+timeout = 20 # after how long to ban people with a pending capctha (in minutes)

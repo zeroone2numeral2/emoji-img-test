@@ -10,17 +10,43 @@ from random import choice
 from typing import List
 
 from telegram import Update, TelegramError, Chat, ParseMode, Bot, BotCommandScopeAllPrivateChats, BotCommand, User, \
-    InlineKeyboardButton, InlineKeyboardMarkup
+    InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
 from telegram.error import BadRequest
-from telegram.ext import Updater, CommandHandler, CallbackContext, Filters, MessageHandler, CallbackQueryHandler
+from telegram.ext import Updater, CommandHandler, CallbackContext, Filters, MessageHandler, CallbackQueryHandler, \
+    MessageFilter
 from telegram.utils import helpers
 
 from emojis import Emojis, EmojiButton
+from images import CaptchaImage
 import utilities
 from mwt import MWT
 from config import config
 
 emojis = Emojis(max_codepoints=1)
+updater = Updater(config.telegram.token, workers=1)
+
+
+class StandardPermission:
+    MUTED: ChatPermissions = ChatPermissions(can_send_messages=False)
+    UNLOCK_ALL: ChatPermissions = ChatPermissions(
+        can_send_messages=True,
+        can_send_media_messages=True,
+        can_send_other_messages=True,
+        can_pin_messages=True,
+        can_change_info=True,
+        can_add_web_page_previews=True,
+        can_invite_users=True,
+        can_send_polls=True
+    )
+
+
+class NewGroup(MessageFilter):
+    def filter(self, message):
+        if message.new_chat_members:
+            member: User
+            for member in message.new_chat_members:
+                if member.id == updater.bot.id:
+                    return True
 
 
 def load_logging_config(file_name='logging.json'):
@@ -52,6 +78,18 @@ def administrators(func):
     return wrapped
 
 
+def users(func):
+    @wraps(func)
+    def wrapped(update: Update, context: CallbackContext, *args, **kwargs):
+        if update.effective_user.id in get_admin_ids(context.bot, update.effective_chat.id):
+            logger.debug("user check failed")
+            return
+
+        return func(update, context, *args, **kwargs)
+
+    return wrapped
+
+
 def fail_with_message(answer_to_message=True):
     def real_decorator(func):
         @wraps(func)
@@ -73,7 +111,7 @@ def get_captcha():
         @wraps(func)
         def wrapped(update: Update, context: CallbackContext, *args, **kwargs):
             if not (update.effective_user.id in context.chat_data and "captcha" in context.chat_data[update.effective_user.id]):
-                update.callback_query.answer("Captcha expired")
+                update.callback_query.answer("Il tempo di verifica è scaduto")
                 utilities.safe_delete(update.callback_query.message)
 
                 context.chat_data.pop(update.effective_user.id, None)
@@ -81,8 +119,8 @@ def get_captcha():
 
             captcha = context.chat_data[update.effective_user.id]["captcha"]
 
-            if captcha.user_id != update.effective_user.id:
-                update.callback_query.answer("You are not supposed to solve this captcha", show_alert=True)
+            if captcha.user.id != update.effective_user.id:
+                update.callback_query.answer("Questo test è destinato ad un altro utente", show_alert=True)
                 return
 
             result_captcha = func(update, context, captcha, *args, **kwargs)
@@ -106,8 +144,9 @@ class EmojiCaptcha:
         if number_of_buttons % 2 != 0:
             raise ValueError("the number of buttons must be even")
 
-        self.user_id = user.id
+        self.user = user
         self.chat_id = chat.id
+        self.message_id = None  # captcha message_id
         self.number_of_correct_emojis = number_of_correct_emojis
         self.number_of_buttons = number_of_buttons
         self.errors = 0
@@ -160,6 +199,9 @@ class EmojiCaptcha:
     def remaining_attempts(self):
         return self.allowed_errors - self.errors
 
+    def get_correct_emojis(self):
+        return [e for e in self.emojis if e.correct]
+
     def correct_answers(self):
         return sum(e.already_selected and e.correct for e in self.emojis)
 
@@ -186,16 +228,51 @@ class EmojiCaptcha:
 
 
 @fail_with_message()
-def on_private_chat_message(update: Update, context: CallbackContext):
-    logger.debug("new captcha for %d", update.effective_user.id)
+@users
+def on_forced_captcha_command(update: Update, context: CallbackContext):
+    logger.debug("forced captcha for %d", update.effective_user.id)
+
+    return on_new_member(update, context)
+
+
+@fail_with_message()
+def on_new_member(update: Update, context: CallbackContext):
+    logger.debug("new member in %d: %d", update.effective_chat.id, update.effective_user.id)
+    if update.message.new_chat_members and update.effective_user.id != update.message.new_chat_members[0].id:
+        # allow people to add other people without captchas
+        return
+
+    update.effective_chat.restrict_member(update.effective_user.id, permissions=StandardPermission.MUTED)
 
     captcha = EmojiCaptcha(
         update.effective_user,
         update.effective_chat,
-        number_of_correct_emojis=3,
+        number_of_correct_emojis=config.captcha.image_emojis,
         number_of_buttons=10,
+        allowed_errors=config.captcha.allowed_errors
     )
-    update.message.reply_text(f"You are allowed {captcha.remaining_attempts()} error(s) and 10 minutes to solve the test", reply_markup=captcha.get_reply_markup())
+
+    captcha_image = CaptchaImage(emojis=captcha.get_correct_emojis())
+    file_path = f"tmp/{update.effective_chat.id}_{update.message.message_id}.png"
+    captcha_image.generate_capctha_image(file_path)
+
+    caption = f"Ciao {update.effective_user.mention_html(utilities.html_escape(update.effective_user.first_name))}, benvenuto/a!" \
+              f"\nPer poter parlare in questa chat, <b>devi dimostrare di non essere un bot!</b> " \
+              f"Seleziona le emoji che vedi nell'immagine utilizzando i tasti qui sotto." \
+              f"\nTi sono concessi {captcha.remaining_attempts()} errori e {config.captcha.timeout} minuti di tempo"
+
+    with open(file_path, "rb") as f:
+        sent_message = update.message.reply_photo(
+            f,
+            caption=caption,
+            reply_markup=captcha.get_reply_markup(),
+            parse_mode=ParseMode.HTML,
+            quote=False
+        )
+
+    captcha_image.delete_generated_image()
+
+    captcha.message_id = sent_message.message_id
 
     context.chat_data[update.effective_user.id] = {"captcha": captcha}
 
@@ -203,7 +280,7 @@ def on_private_chat_message(update: Update, context: CallbackContext):
 @fail_with_message(answer_to_message=False)
 @get_captcha()
 def on_already_selected_button(update: Update, context: CallbackContext, captcha: EmojiCaptcha):
-    update.callback_query.answer("You already selected this emoji", cache_time=60*60*24)
+    update.callback_query.answer("Hai già selezionato questa emoji in precedenza", cache_time=60*60*24)
 
 
 @fail_with_message(answer_to_message=False)
@@ -217,39 +294,124 @@ def on_button(update: Update, context: CallbackContext, captcha: EmojiCaptcha):
 
     captcha.mark_as_selected(emoji.id)
 
-    new_text = ""
+    new_caption = ""
     if emoji.correct:
-        update.callback_query.answer(f"Good job! {captcha.number_of_correct_emojis - captcha.correct_answers()} to go")
+        still_to_guess = captcha.number_of_correct_emojis - captcha.correct_answers()
+        if still_to_guess != 0:
+            if still_to_guess == 1:
+                alert_text = f"Ottimo lavoro! Ne rimane ancora una"
+            else:
+                alert_text = f"Ottimo lavoro! Ne rimangono ancora {still_to_guess}"
+            update.callback_query.answer(alert_text)
+        else:
+            logger.debug("captcha completed, cleaning up and lifting restrictions...")
+            context.chat_data.pop(update.effective_user.id, None)
+            utilities.safe_delete(update.callback_query.message)
+            update.effective_chat.restrict_member(update.effective_user.id, permissions=StandardPermission.UNLOCK_ALL)
+            return
     else:
         errors = captcha.add_error()
         if errors > captcha.allowed_errors:
-            update.callback_query.edit_message_text(f"Too many errors ({errors})", reply_markup=None)
-            return captcha
+            utilities.safe_delete(update.callback_query.message)
+            user_mention = update.effective_user.mention_html(utilities.escape(update.effective_user.first_name))
+            context.bot.send_message(
+                update.effective_chat.id,
+                f"{user_mention} non è riuscito a verificarsi a causa dei troppi errori ({errors}), "
+                f"è ancora membro di questo gruppo ma non portà parlare",
+                parse_mode=ParseMode.HTML
+            )
+            logger.debug("captcha failed, cleaning up...")
+            context.chat_data.pop(update.effective_user.id, None)
+            return
         elif captcha.remaining_attempts() == 0:
-            new_text = "You are no longer allowed to make mistakes"
-            update.callback_query.answer(f"Wrong emoji!")
+            update.callback_query.answer("\U000026a0\U0000fe0f Emoji errata! Non ti è più permesso fare errori!",
+                                         show_alert=True)
         else:
-            s_or_not = "s" if captcha.remaining_attempts() > 1 else ""
-            new_text = f"You are still allowed {captcha.remaining_attempts()} error{s_or_not}"
-            update.callback_query.answer(f"Wrong emoji!")
+            remaining_attempts = captcha.remaining_attempts()
+            if remaining_attempts == 1:
+                alert_text = f"\U000026a0\U0000fe0f Emoji errata! Ti è ancora concesso un solo errore"
+            else:
+                alert_text = f"Emoji errata! Ti sono ancora concessi {captcha.remaining_attempts()} errori"
+
+            update.callback_query.answer(alert_text)
 
     reply_markup = captcha.get_reply_markup()
-    if new_text:
-        update.callback_query.edit_message_text(new_text, reply_markup=reply_markup)
-    else:
-        update.callback_query.edit_message_reply_markup(reply_markup=reply_markup)
+    update.callback_query.edit_message_reply_markup(reply_markup=reply_markup)
 
     return captcha
 
 
+@fail_with_message()
+def on_new_group_chat(update: Update, _):
+    logger.info("new group chat: %s", update.effective_chat.title)
+
+    if config.telegram.exit_unknown_groups and update.effective_user.id not in config.telegram.admins:
+        logger.info("unauthorized: leaving...")
+        update.effective_chat.leave()
+        return
+
+
+def cleanup_and_ban(context: CallbackContext):
+    for chat_id, chat_data in context.dispatcher.chat_data.items():
+        user_id_to_pop = []
+        for user_id, user_data in chat_data.items():
+            if "captcha" not in user_data:
+                continue
+
+            captcha: EmojiCaptcha = user_data["captcha"]
+
+            now = utilities.now_utc()
+            diff_seconds = (now - captcha.created_on).total_seconds()
+            if diff_seconds <= config.captcha.timeout * 60:
+                continue
+
+            logger.info("cleaning up user %d data from chat %d: diff of %d seconds", user_id, chat_id, diff_seconds)
+
+            try:
+                context.bot.delete_message(chat_id, captcha.message_id)
+            except (TelegramError, BadRequest) as e:
+                logger.error("error while deleting message: %s", str(e))
+
+            ban_success = False
+            try:
+                context.bot.ban_chat_member(chat_id, captcha.user.id, revoke_messages=True)
+                ban_success = True
+            except (TelegramError, BadRequest) as e:
+                logger.error("error while banning user: %s", str(e))
+
+            if ban_success:
+                try:
+                    user_mention = captcha.user.mention_html(utilities.escape(captcha.user.first_name))
+                    context.bot.send_message(
+                        chat_id,
+                        f"{user_mention} non ha completato il test nei {config.captcha.timeout} minuti previsti, "
+                        f"è stato/a bannato/a",
+                        parse_mode=ParseMode.HTML
+                    )
+                except (TelegramError, BadRequest) as e:
+                    logger.error("error while sending the message in the group: %s", str(e))
+
+            user_id_to_pop.append(user_id)
+
+        if user_id_to_pop:
+            logger.debug("popping %d users from %d", len(user_id_to_pop), chat_id)
+            for user_id in user_id_to_pop:
+                logger.debug("popping %d", user_id)
+                chat_data.pop(user_id, None)
+
+
 def main():
-    updater = Updater(config.telegram.token, workers=1)
     dispatcher = updater.dispatcher
 
-    dispatcher.add_handler(MessageHandler(Filters.chat_type.private, on_private_chat_message))
+    new_group_filter = NewGroup()
+    dispatcher.add_handler(MessageHandler(new_group_filter, on_new_group_chat))
+    dispatcher.add_handler(MessageHandler(Filters.regex(r"^/testc"), on_forced_captcha_command))
+    dispatcher.add_handler(MessageHandler(Filters.status_update.new_chat_members & ~new_group_filter, on_new_member))
 
     dispatcher.add_handler(CallbackQueryHandler(on_already_selected_button, pattern=r'^button:already_(?:solved|error)$'))
     dispatcher.add_handler(CallbackQueryHandler(on_button, pattern=r'^button:(.*)$'))
+
+    updater.job_queue.run_repeating(cleanup_and_ban, interval=1, first=1)
 
     updater.bot.set_my_commands([])  # make sure the bot doesn't have any command set...
     updater.bot.set_my_commands(  # ...then set the scope for private chats
@@ -264,6 +426,7 @@ def main():
 
     logger.info("running as @%s, allowed updates: %s", updater.bot.username, allowed_updates)
     updater.start_polling(drop_pending_updates=True, allowed_updates=allowed_updates)
+    updater.idle()
 
 
 if __name__ == '__main__':

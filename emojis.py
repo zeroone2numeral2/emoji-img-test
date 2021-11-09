@@ -4,6 +4,7 @@ import random
 
 WHITE_CHECKMARK_CODEPOINT = '2705'
 RED_CROSS_CODEPOINT = '274c'
+WARNING_CODEPOINT = '26a0.fe0f'
 
 
 def hex_codepoint_to_unicode(hex_codepoint: str):
@@ -17,7 +18,7 @@ def hex_codepoint_to_id(hex_codepoints: list, sep: str = "."):
 class Emoji:
     def __init__(self, codepoints_str, sep="-", compile=True):
         self.origin_str = codepoints_str
-        self.codepoints_hex = codepoints_str.split(sep)
+        self.codepoints_hex = codepoints_str.lower().split(sep)
         self.codepoints_decimal = []
         self.codepoints_unicode = []
         self._sep = sep
@@ -98,7 +99,7 @@ class EmojiButton(Emoji):
 
 
 class Emojis:
-    BLACKLIST = (WHITE_CHECKMARK_CODEPOINT, RED_CROSS_CODEPOINT)  # do not use these two emojis
+    BLACKLIST = (WHITE_CHECKMARK_CODEPOINT, RED_CROSS_CODEPOINT, WARNING_CODEPOINT)  # do not use these two emojis
 
     def __init__(self, dir_path="emojis", min_codepoints=1, max_codepoints=999):
         self.min_codepoints = min_codepoints

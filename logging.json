@@ -29,6 +29,9 @@
         "telegram": {
             "level": "WARNING"
         },
+        "PIL": {
+            "level": "WARNING"
+        },
         "apscheduler": {
             "level": "WARNING"
         }
