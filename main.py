@@ -163,26 +163,26 @@ class EmojiCaptcha:
     def correct_answers(self):
         return sum(e.already_selected and e.correct for e in self.emojis)
 
-    def get_emoji(self, hex_str):
+    def get_emoji(self, emoji_id):
         for emoji in self.emojis:
-            if emoji.id == hex_str:
+            if emoji.id == emoji_id:
                 return emoji
 
-        raise ValueError(f"hex codepoints not found: {hex_str}")
+        raise ValueError(f"emoji_id (hex codepoints) not found: {emoji_id}")
 
-    def mark_as_selected(self, hex_str):
+    def mark_as_selected(self, emoji_id):
         for i, emoji in enumerate(self.emojis):
-            if emoji.id == hex_str:
+            if emoji.id == emoji_id:
                 self.emojis[i].already_selected = True
                 return
 
-        raise ValueError(f"hex codepoints not found: {hex_str}")
+        raise ValueError(f"emoji_id (hex codepoints) not found: {emoji_id}")
 
     def __str__(self):
-        emojis_list = [f"EmojiButton(id={e.id})" for e in self.emojis]
+        emojis_list = [f"{type(e).__name__}(id={e.id})" for e in self.emojis]
         emojis_string = "\n\t".join(emojis_list)
 
-        return f"EmojiCaptcha(\n\t{emojis_string}\n)"
+        return f"{type(self).__name__}(\n\t{emojis_string}\n)"
 
 
 @fail_with_message()
@@ -203,7 +203,7 @@ def on_private_chat_message(update: Update, context: CallbackContext):
 @fail_with_message(answer_to_message=False)
 @get_captcha()
 def on_already_selected_button(update: Update, context: CallbackContext, captcha: EmojiCaptcha):
-    update.callback_query.answer("You already selected this emoji", show_alert=True)
+    update.callback_query.answer("You already selected this emoji", cache_time=60*60*24)
 
 
 @fail_with_message(answer_to_message=False)

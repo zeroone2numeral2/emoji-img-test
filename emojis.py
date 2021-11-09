@@ -132,9 +132,8 @@ class Emojis:
         attempts = 0
         while len(random_emojis) < count:
             attempts += 1
-
             emoji = random.choice(self.emojis)
-            if emoji not in random_emojis and not emoji.id not in self.BLACKLIST:
+            if emoji not in random_emojis and emoji.id not in self.BLACKLIST:
                 if min_codepoints <= len(emoji.codepoints_hex) <= max_codepoints:
                     random_emojis.append(emoji)
 
