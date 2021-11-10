@@ -1,7 +1,15 @@
 import datetime
+import logging
+import os
+import pickle
 from html import escape
 
+# noinspection PyPackageRequirements
 from telegram import Message, User
+# noinspection PyPackageRequirements
+from telegram.ext import PicklePersistence
+
+logger = logging.getLogger(__name__)
 
 
 def now_utc():
@@ -25,4 +33,25 @@ def safe_delete(message: Message):
         message.delete()
     except Exception:
         pass
+
+
+def persistence_object(file_path='persistence/data.pickle'):
+    logger.info('unpickling persistence: %s', file_path)
+    try:
+        # try to load the file
+        try:
+            with open(file_path, "rb") as f:
+                pickle.load(f)
+        except FileNotFoundError:
+            pass
+    except (pickle.UnpicklingError, EOFError):
+        logger.warning('deserialization failed: removing persistence file and trying again')
+        os.remove(file_path)
+
+    return PicklePersistence(
+        filename=file_path,
+        store_chat_data=True,
+        store_user_data=True,
+        store_bot_data=False
+    )
 

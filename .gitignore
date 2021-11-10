@@ -4,3 +4,4 @@ idea/
 config.toml
 *.log
 *.log.*
+*.pickle

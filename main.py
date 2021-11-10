@@ -12,9 +12,7 @@ from typing import List, Callable
 from telegram import Update, TelegramError, Chat, ParseMode, Bot, BotCommandScopeAllPrivateChats, BotCommand, User, \
     InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
 from telegram.error import BadRequest
-from telegram.ext import Updater, CommandHandler, CallbackContext, Filters, MessageHandler, CallbackQueryHandler, \
-    MessageFilter
-from telegram.utils import helpers
+from telegram.ext import Updater, CallbackContext, Filters, MessageHandler, CallbackQueryHandler, MessageFilter
 
 from emojis import Emojis, EmojiButton
 from images import CaptchaImage
@@ -23,7 +21,11 @@ from mwt import MWT
 from config import config
 
 emojis = Emojis(max_codepoints=1)
-updater = Updater(config.telegram.token, workers=1)
+updater = Updater(
+    config.telegram.token,
+    workers=1,
+    persistence=None,  # disable persistence for now
+)
 
 
 class StandardPermission:
