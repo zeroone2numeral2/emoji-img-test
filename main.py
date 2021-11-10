@@ -129,7 +129,7 @@ def get_captcha():
         def wrapped(update: Update, context: CallbackContext, *args, **kwargs):
             target_user_id = int(context.match[2])
             if target_user_id != update.effective_user.id:
-                update.callback_query.answer("Questo test è destinato ad un altro utente", show_alert=True)
+                update.callback_query.answer("Questo test è destinato ad un altro utente", show_alert=True, cache_time=60*60*24)
                 return
 
             if update.effective_user.id not in context.chat_data or "captcha" not in context.chat_data[update.effective_user.id]:
@@ -295,7 +295,7 @@ def on_new_member(update: Update, context: CallbackContext):
         allowed_errors=config.captcha.allowed_errors
     )
 
-    captcha_image = CaptchaImage(emojis=captcha.get_correct_emojis())
+    captcha_image = CaptchaImage(background_path=config.captcha.image_path, emojis=captcha.get_correct_emojis(), max_side=512)
     file_path = f"tmp/{update.effective_chat.id}_{update.message.message_id}.png"
     captcha_image.generate_capctha_image(file_path)
 

@@ -4,6 +4,9 @@ admins = []
 exit_unknown_groups = true
 
 [captcha]
+image_path = '''assets/bg.default.png'''
+image_max_side = 512 # max image size (largest side), 0 to disable resizing
+image_scale_factor = 0 # scale factor to applly after resizing to image_max_side, 0 to disable scaling
 image_emojis = 4 # how many emojis to paste on the image
 allowed_errors = 2 # mistakes an user can do while solving a captcha (allowed_errors + 1 -> test failed)
 timeout = 20 # after how long to ban people with a pending capctha (in minutes)
