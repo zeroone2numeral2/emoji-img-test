@@ -7,3 +7,4 @@ exit_unknown_groups = true
 image_emojis = 4 # how many emojis to paste on the image
 allowed_errors = 2 # mistakes an user can do while solving a captcha (allowed_errors + 1 -> test failed)
 timeout = 20 # after how long to ban people with a pending capctha (in minutes)
+send_message_on_fail = true # send a message if the user fails the captcha, or the timeout expires

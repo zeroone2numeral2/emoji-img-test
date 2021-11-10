@@ -328,16 +328,19 @@ def on_button(update: Update, context: CallbackContext, captcha: EmojiCaptcha):
     else:
         errors = captcha.add_error()
         if errors > captcha.allowed_errors:
-            utilities.safe_delete(update.callback_query.message)
-            user_mention = utilities.mention_escaped(update.effective_user)
-            context.bot.send_message(
-                update.effective_chat.id,
-                f"{user_mention} non è riuscito a verificarsi a causa dei troppi errori ({errors}), "
-                f"è ancora membro di questo gruppo ma non portà parlare",
-                parse_mode=ParseMode.HTML
-            )
             logger.debug("captcha failed, cleaning up...")
             context.chat_data.pop(update.effective_user.id, None)
+            utilities.safe_delete(update.callback_query.message)
+
+            if config.captcha.send_message_on_fail:
+                user_mention = utilities.mention_escaped(update.effective_user)
+                context.bot.send_message(
+                    update.effective_chat.id,
+                    f"{user_mention} non è riuscito a verificarsi a causa dei troppi errori ({errors}), "
+                    f"è ancora membro di questo gruppo ma non portà parlare",
+                    parse_mode=ParseMode.HTML
+                )
+
             return
         elif captcha.remaining_attempts() == 0:
             update.callback_query.answer("\U000026a0\U0000fe0f Emoji errata! Non ti è più permesso fare errori!",
@@ -395,7 +398,7 @@ def cleanup_and_ban(context: CallbackContext):
             except (TelegramError, BadRequest) as e:
                 logger.error("error while banning user: %s", str(e))
 
-            if ban_success:
+            if ban_success and config.captcha.send_message_on_fail:
                 try:
                     user_mention = utilities.mention_escaped(captcha.user)
                     context.bot.send_message(
