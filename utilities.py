@@ -31,8 +31,9 @@ def safe_delete(message: Message):
     # noinspection PyBroadException
     try:
         message.delete()
+        return True
     except Exception:
-        pass
+        return False
 
 
 def persistence_object(file_path='persistence/data.pickle'):

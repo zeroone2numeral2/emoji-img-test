@@ -72,7 +72,19 @@ def administrators(func):
     @wraps(func)
     def wrapped(update: Update, context: CallbackContext, *args, **kwargs):
         if update.effective_user.id not in get_admin_ids(context.bot, update.effective_chat.id):
-            logger.debug("admin check failed")
+            logger.debug("admin check failed for callback <%s>", func.__name__)
+            return
+
+        return func(update, context, *args, **kwargs)
+
+    return wrapped
+
+
+def superadmin(func):
+    @wraps(func)
+    def wrapped(update: Update, context: CallbackContext, *args, **kwargs):
+        if update.effective_user.id not in config.telegram.admins:
+            logger.debug("superadmin check failed for callback <%s>", func.__name__)
             return
 
         return func(update, context, *args, **kwargs)
@@ -247,6 +259,23 @@ def on_forced_captcha_command(update: Update, context: CallbackContext):
     logger.debug("forced captcha for %d", update.effective_user.id)
 
     return on_new_member(update, context)
+
+
+@fail_with_message(answer_to_message=True)
+@superadmin
+def on_unrestrict_command(update: Update, context: CallbackContext):
+    logger.debug("!unrestrict from %d", update.effective_user.id)
+    if not update.message.reply_to_message:
+        return update.message.reply_html("Reply to a message")
+
+    update.effective_chat.restrict_member(
+        update.message.reply_to_message.from_user.id,
+        permissions=StandardPermission.UNLOCK_ALL
+    )
+
+    deleted = utilities.safe_delete(update.message)
+    if not deleted:
+        update.message.reply_html("Unrestricted")
 
 
 @fail_with_message()
@@ -427,7 +456,8 @@ def main():
 
     new_group_filter = NewGroup()
     dispatcher.add_handler(MessageHandler(new_group_filter, on_new_group_chat))
-    dispatcher.add_handler(MessageHandler(Filters.regex(r"^/testc"), on_forced_captcha_command))
+    dispatcher.add_handler(MessageHandler(Filters.chat_type.supergroup & Filters.regex(r"^/testc"), on_forced_captcha_command))
+    dispatcher.add_handler(MessageHandler(Filters.chat_type.supergroup & Filters.regex(r"^!(?:ur|unrestrict)"), on_unrestrict_command))
     dispatcher.add_handler(MessageHandler(Filters.status_update.new_chat_members & ~new_group_filter, on_new_member))
 
     dispatcher.add_handler(CallbackQueryHandler(on_already_selected_button, pattern=r'^button:already_(?:solved|error):user(\d+)$'))
