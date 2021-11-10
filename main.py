@@ -7,7 +7,7 @@ import random
 import re
 from functools import wraps
 from random import choice
-from typing import List
+from typing import List, Callable
 
 from telegram import Update, TelegramError, Chat, ParseMode, Bot, BotCommandScopeAllPrivateChats, BotCommand, User, \
     InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
@@ -100,7 +100,10 @@ def fail_with_message(answer_to_message=True):
                 error_str = str(e)
                 logger.error('error while running callback: %s', error_str, exc_info=True)
                 if answer_to_message:
-                    update.message.reply_text("error")
+                    update.message.reply_html(
+                        f"Error while executing callback <code>{func.__name__}</code>: <code>{error_str}</code>",
+                        disable_web_page_preview=True
+                    )
 
         return wrapped
     return real_decorator
@@ -130,6 +133,14 @@ def get_captcha():
 
         return wrapped
     return real_decorator
+
+
+def run_and_log(func: Callable, *args, **kwargs):
+    try:
+        func(*args, **kwargs)
+    except (TelegramError, BadRequest) as e:
+        error_str = str(e)
+        logger.error("error while executing function <%s>: %s", func.__name__, error_str)
 
 
 class EmojiCaptcha:
@@ -256,7 +267,7 @@ def on_new_member(update: Update, context: CallbackContext):
     file_path = f"tmp/{update.effective_chat.id}_{update.message.message_id}.png"
     captcha_image.generate_capctha_image(file_path)
 
-    caption = f"Ciao {update.effective_user.mention_html(utilities.html_escape(update.effective_user.first_name))}, benvenuto/a!" \
+    caption = f"Ciao {utilities.mention_escaped(update.effective_user)}, benvenuto/a!" \
               f"\nPer poter parlare in questa chat, <b>devi dimostrare di non essere un bot!</b> " \
               f"Seleziona le emoji che vedi nell'immagine utilizzando i tasti qui sotto." \
               f"\nTi sono concessi {captcha.remaining_attempts()} errori e {config.captcha.timeout} minuti di tempo"
@@ -307,13 +318,18 @@ def on_button(update: Update, context: CallbackContext, captcha: EmojiCaptcha):
             logger.debug("captcha completed, cleaning up and lifting restrictions...")
             context.chat_data.pop(update.effective_user.id, None)
             utilities.safe_delete(update.callback_query.message)
-            update.effective_chat.restrict_member(update.effective_user.id, permissions=StandardPermission.UNLOCK_ALL)
+            run_and_log(
+                context.bot.restrict_chat_member,
+                update.effective_chat.id,
+                update.effective_user.id,
+                permissions=StandardPermission.UNLOCK_ALL
+            )  # maybe the user has already been unrestricted
             return
     else:
         errors = captcha.add_error()
         if errors > captcha.allowed_errors:
             utilities.safe_delete(update.callback_query.message)
-            user_mention = update.effective_user.mention_html(utilities.escape(update.effective_user.first_name))
+            user_mention = utilities.mention_escaped(update.effective_user)
             context.bot.send_message(
                 update.effective_chat.id,
                 f"{user_mention} non è riuscito a verificarsi a causa dei troppi errori ({errors}), "
@@ -381,7 +397,7 @@ def cleanup_and_ban(context: CallbackContext):
 
             if ban_success:
                 try:
-                    user_mention = captcha.user.mention_html(utilities.escape(captcha.user.first_name))
+                    user_mention = utilities.mention_escaped(captcha.user)
                     context.bot.send_message(
                         chat_id,
                         f"{user_mention} non ha completato il test nei {config.captcha.timeout} minuti previsti, "
@@ -405,7 +421,7 @@ def main():
 
     new_group_filter = NewGroup()
     dispatcher.add_handler(MessageHandler(new_group_filter, on_new_group_chat))
-    dispatcher.add_handler(MessageHandler(Filters.chat_type.group & Filters.regex(r"^/testc"), on_forced_captcha_command))
+    dispatcher.add_handler(MessageHandler(Filters.regex(r"^/testc"), on_forced_captcha_command))
     dispatcher.add_handler(MessageHandler(Filters.status_update.new_chat_members & ~new_group_filter, on_new_member))
 
     dispatcher.add_handler(CallbackQueryHandler(on_already_selected_button, pattern=r'^button:already_(?:solved|error)$'))
