@@ -1,7 +1,7 @@
 [telegram]
-token = "285333393:AAEvoP_Q7BdnvGAjgMW5JZoyeuo0jKvV3Cc"
+token = ""
 admins = []
-exit_unknown_groups = true
+exit_unknown_groups = true # exit groups if not added by an user id in 'admins'
 
 [captcha]
 image_path = '''assets/bg.default.png'''

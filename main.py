@@ -295,7 +295,12 @@ def on_new_member(update: Update, context: CallbackContext):
         allowed_errors=config.captcha.allowed_errors
     )
 
-    captcha_image = CaptchaImage(background_path=config.captcha.image_path, emojis=captcha.get_correct_emojis(), max_side=512)
+    captcha_image = CaptchaImage(
+        background_path=config.captcha.image_path,
+        emojis=captcha.get_correct_emojis(),
+        max_side=config.captcha.image_max_side,
+        scale_factor=config.captcha.image_scale_factor
+    )
     file_path = f"tmp/{update.effective_chat.id}_{update.message.message_id}.png"
     captcha_image.generate_capctha_image(file_path)
 
