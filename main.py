@@ -427,7 +427,7 @@ def main():
     dispatcher.add_handler(CallbackQueryHandler(on_already_selected_button, pattern=r'^button:already_(?:solved|error)$'))
     dispatcher.add_handler(CallbackQueryHandler(on_button, pattern=r'^button:(.*)$'))
 
-    updater.job_queue.run_repeating(cleanup_and_ban, interval=1, first=1)
+    updater.job_queue.run_repeating(cleanup_and_ban, interval=60, first=60)
 
     updater.bot.set_my_commands([])  # make sure the bot doesn't have any command set...
     updater.bot.set_my_commands(  # ...then set the scope for private chats
