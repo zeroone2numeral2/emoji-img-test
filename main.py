@@ -113,7 +113,12 @@ def get_captcha():
     def real_decorator(func):
         @wraps(func)
         def wrapped(update: Update, context: CallbackContext, *args, **kwargs):
-            if not (update.effective_user.id in context.chat_data and "captcha" in context.chat_data[update.effective_user.id]):
+            target_user_id = int(context.match[2])
+            if target_user_id != update.effective_user.id:
+                update.callback_query.answer("Questo test è destinato ad un altro utente", show_alert=True)
+                return
+
+            if update.effective_user.id not in context.chat_data or "captcha" not in context.chat_data[update.effective_user.id]:
                 update.callback_query.answer("Il tempo di verifica è scaduto")
                 utilities.safe_delete(update.callback_query.message)
 
@@ -121,10 +126,6 @@ def get_captcha():
                 return
 
             captcha = context.chat_data[update.effective_user.id]["captcha"]
-
-            if captcha.user.id != update.effective_user.id:
-                update.callback_query.answer("Questo test è destinato ad un altro utente", show_alert=True)
-                return
 
             result_captcha = func(update, context, captcha, *args, **kwargs)
             if result_captcha:
@@ -194,7 +195,7 @@ class EmojiCaptcha:
             buttons_row = []
             for column_number in range(buttons_per_row):
                 emoji = self.emojis[i]
-                button = InlineKeyboardButton(emoji.unicode, callback_data=emoji.callback_data)
+                button = InlineKeyboardButton(emoji.unicode, callback_data=emoji.user_callback_data(self.user.id))
 
                 buttons_row.append(button)
                 i += 1
@@ -427,8 +428,8 @@ def main():
     dispatcher.add_handler(MessageHandler(Filters.regex(r"^/testc"), on_forced_captcha_command))
     dispatcher.add_handler(MessageHandler(Filters.status_update.new_chat_members & ~new_group_filter, on_new_member))
 
-    dispatcher.add_handler(CallbackQueryHandler(on_already_selected_button, pattern=r'^button:already_(?:solved|error)$'))
-    dispatcher.add_handler(CallbackQueryHandler(on_button, pattern=r'^button:(.*)$'))
+    dispatcher.add_handler(CallbackQueryHandler(on_already_selected_button, pattern=r'^button:already_(?:solved|error):user(\d+)$'))
+    dispatcher.add_handler(CallbackQueryHandler(on_button, pattern=r'^button:(.*):user(\d+)$'))
 
     updater.job_queue.run_repeating(cleanup_and_ban, interval=60, first=60)
 

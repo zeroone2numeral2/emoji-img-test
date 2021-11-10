@@ -97,6 +97,14 @@ class EmojiButton(Emoji):
     def convert(cls, emoji: Emoji):
         return cls(emoji.origin_str)
 
+    def user_callback_data(self, user_id):
+        if self.already_selected and self.correct:
+            return f"button:already_solved:user{user_id}"
+        if self.already_selected and not self.correct:
+            return f"button:already_error:user{user_id}"
+
+        return f"button:{self.id}:user{user_id}"
+
 
 class Emojis:
     BLACKLIST = (WHITE_CHECKMARK_CODEPOINT, RED_CROSS_CODEPOINT, WARNING_CODEPOINT)  # do not use these two emojis
