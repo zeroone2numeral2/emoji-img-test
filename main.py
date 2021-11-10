@@ -119,7 +119,7 @@ def get_captcha():
                 return
 
             if update.effective_user.id not in context.chat_data or "captcha" not in context.chat_data[update.effective_user.id]:
-                update.callback_query.answer("Il tempo di verifica è scaduto")
+                update.callback_query.answer("Questo test non è più valido")
                 utilities.safe_delete(update.callback_query.message)
 
                 context.chat_data.pop(update.effective_user.id, None)
