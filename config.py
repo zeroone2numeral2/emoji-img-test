@@ -7,4 +7,7 @@ class AttrDict(dict):
         self.__dict__ = self
 
 
-config = toml.load('config.toml', AttrDict)
+try:
+    config = toml.load('config.toml', AttrDict)
+except FileNotFoundError:
+    print("Please rename 'config.example.toml' to 'config.toml' and change the relevant values")
