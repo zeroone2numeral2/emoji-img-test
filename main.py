@@ -228,6 +228,9 @@ class EmojiCaptcha:
     def get_correct_emojis(self):
         return [e for e in self.emojis if e.correct]
 
+    def get_correct_and_selected_count(self):
+        return len([e for e in self.emojis if e.correct and e.already_selected])
+
     def correct_answers(self):
         return sum(e.already_selected and e.correct for e in self.emojis)
 
@@ -373,8 +376,8 @@ def on_button(update: Update, context: CallbackContext, captcha: EmojiCaptcha):
                 user_mention = utilities.mention_escaped(update.effective_user)
                 context.bot.send_message(
                     update.effective_chat.id,
-                    f"{user_mention} non è riuscito a verificarsi a causa dei troppi errori ({errors}), "
-                    f"è ancora membro di questo gruppo ma non portà parlare",
+                    f"{user_mention} non è riuscito/a a verificarsi a causa dei troppi errori ({errors}), "
+                    f"è ancora membro di questo gruppo ma non portà parlare [#mute #u{update.effective_user.id}]",
                     parse_mode=ParseMode.HTML
                 )
 
@@ -441,7 +444,8 @@ def cleanup_and_ban(context: CallbackContext):
                     context.bot.send_message(
                         chat_id,
                         f"{user_mention} non ha completato il test nei {config.captcha.timeout} minuti previsti, "
-                        f"è stato/a bannato/a",
+                        f"è stato/a bloccato/a, {captcha.get_correct_and_selected_count()} emoji corrette su "
+                        f"{captcha.number_of_correct_emojis} [#ban #u{captcha.user.id}]",
                         parse_mode=ParseMode.HTML
                     )
                 except (TelegramError, BadRequest) as e:
