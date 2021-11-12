@@ -129,7 +129,7 @@ def get_captcha():
     def real_decorator(func):
         @wraps(func)
         def wrapped(update: Update, context: CallbackContext, *args, **kwargs):
-            logger.debug("%s", update.callback_query.data)
+            # logger.debug("%s", update.callback_query.data)
             target_user_id = int(context.match[2])
             if target_user_id != update.effective_user.id:
                 update.callback_query.answer("Questo test è destinato ad un altro utente", show_alert=True, cache_time=60*60*24)
