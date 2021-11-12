@@ -47,7 +47,7 @@ class MWT:
 
             except KeyError:
                 logger.debug("cache: new")
-                v = cache[key] = f(*args,**kwargs), t
+                v = cache[key] = f(*args, **kwargs), t
 
             return v[0]
 

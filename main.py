@@ -6,13 +6,15 @@ import os
 import random
 import re
 from functools import wraps
+from pathlib import Path
 from random import choice
 from typing import List, Callable
 
 from telegram import Update, TelegramError, Chat, ParseMode, Bot, BotCommandScopeAllPrivateChats, BotCommand, User, \
-    InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
+    InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions, BotCommandScopeAllChatAdministrators
 from telegram.error import BadRequest
-from telegram.ext import Updater, CallbackContext, Filters, MessageHandler, CallbackQueryHandler, MessageFilter
+from telegram.ext import Updater, CallbackContext, Filters, MessageHandler, CallbackQueryHandler, MessageFilter, \
+    CommandHandler
 
 from emojis import Emojis, EmojiButton
 from images import CaptchaImage
@@ -257,7 +259,6 @@ class EmojiCaptcha:
 
 
 @fail_with_message()
-@users
 def on_forced_captcha_command(update: Update, context: CallbackContext):
     logger.debug("forced captcha for %d", update.effective_user.id)
 
@@ -281,6 +282,40 @@ def on_unrestrict_command(update: Update, context: CallbackContext):
         update.message.reply_html("Unrestricted")
 
 
+def get_chat_background_path(chat_id: int) -> Path:
+    chat_id_str = str(chat_id).replace("-100", "")
+    file_name = f"background_{chat_id_str}.jpg"
+
+    return Path("backgrounds") / file_name
+
+
+def get_background_path(chat_id: int, default_file_path: str) -> Path:
+    image_path = get_chat_background_path(chat_id)
+    if not image_path.exists():
+        return Path(default_file_path)
+
+    return image_path
+
+
+@fail_with_message()
+@administrators
+def on_setphoto_command(update: Update, context: CallbackContext):
+    logger.debug("/setphoto from %d -> %d", update.effective_user.id, update.effective_chat.id)
+
+    if not update.message.reply_to_message or not update.message.reply_to_message.photo:
+        return update.message.reply_html("Rispondi ad una foto con <code>/setphoto</code> per utilizzarla come sfondo")
+
+    file_path = get_chat_background_path(update.effective_chat.id)
+    photo_file = update.message.reply_to_message.photo[-1].get_file()
+    photo_file.download(file_path)
+
+    text = f"Questa foto verrà utilizzata come sfondo per il captcha"
+    if config.captcha.image_max_side:
+        text = f"{text} (verrà ridimensionata a <code>{config.captcha.image_max_side}px</code>)"
+
+    update.message.reply_to_message.reply_html(text)
+
+
 @fail_with_message()
 def on_new_member(update: Update, context: CallbackContext):
     logger.debug("new member in %d: %d", update.effective_chat.id, update.effective_user.id)
@@ -288,7 +323,9 @@ def on_new_member(update: Update, context: CallbackContext):
         # allow people to add other people without captchas
         return
 
-    update.effective_chat.restrict_member(update.effective_user.id, permissions=StandardPermission.MUTED)
+    if update.effective_user.id not in get_admin_ids(context.bot, update.effective_chat.id):
+        # testing: do not restrict if the user is an admin
+        update.effective_chat.restrict_member(update.effective_user.id, permissions=StandardPermission.MUTED)
 
     captcha = EmojiCaptcha(
         update.effective_user,
@@ -299,7 +336,7 @@ def on_new_member(update: Update, context: CallbackContext):
     )
 
     captcha_image = CaptchaImage(
-        background_path=config.captcha.image_path,
+        background_path=get_background_path(update.effective_chat.id, config.captcha.image_path),
         emojis=captcha.get_correct_emojis(),
         max_side=config.captcha.image_max_side,
         scale_factor=config.captcha.image_scale_factor
@@ -465,7 +502,8 @@ def main():
 
     new_group_filter = NewGroup()
     dispatcher.add_handler(MessageHandler(new_group_filter, on_new_group_chat))
-    dispatcher.add_handler(MessageHandler(Filters.chat_type.supergroup & Filters.regex(r"^/testc"), on_forced_captcha_command))
+    dispatcher.add_handler(CommandHandler(["setphoto"], on_setphoto_command, filters=Filters.chat_type.supergroup))
+    dispatcher.add_handler(CommandHandler(["testc"], on_forced_captcha_command, filters=Filters.chat_type.supergroup))
     dispatcher.add_handler(MessageHandler(Filters.chat_type.supergroup & Filters.regex(r"^!(?:ur|unrestrict)"), on_unrestrict_command))
     dispatcher.add_handler(MessageHandler(Filters.status_update.new_chat_members & ~new_group_filter, on_new_member))
 
@@ -476,11 +514,12 @@ def main():
 
     updater.bot.set_my_commands([])  # make sure the bot doesn't have any command set...
     updater.bot.set_my_commands(  # ...then set the scope for private chats
-        [
-            BotCommand("start", "get the welcome message"),
-            BotCommand("help", "get the help message")
-        ],
+        [],
         scope=BotCommandScopeAllPrivateChats()
+    )
+    updater.bot.set_my_commands(  # ...then set the scope for group administrators
+        [BotCommand("setphoto", "imposta una foto come background del captcha")],
+        scope=BotCommandScopeAllChatAdministrators()
     )
 
     allowed_updates = ["message", "callback_query"]  # https://core.telegram.org/bots/api#getupdates
