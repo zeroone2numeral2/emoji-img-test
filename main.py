@@ -129,6 +129,7 @@ def get_captcha():
     def real_decorator(func):
         @wraps(func)
         def wrapped(update: Update, context: CallbackContext, *args, **kwargs):
+            logger.debug("%s", update.callback_query.data)
             target_user_id = int(context.match[2])
             if target_user_id != update.effective_user.id:
                 update.callback_query.answer("Questo test è destinato ad un altro utente", show_alert=True, cache_time=60*60*24)
@@ -507,7 +508,7 @@ def main():
     dispatcher.add_handler(MessageHandler(Filters.chat_type.supergroup & Filters.regex(r"^!(?:ur|unrestrict)"), on_unrestrict_command))
     dispatcher.add_handler(MessageHandler(Filters.status_update.new_chat_members & ~new_group_filter, on_new_member))
 
-    dispatcher.add_handler(CallbackQueryHandler(on_already_selected_button, pattern=r'^button:already_(?:solved|error):user(\d+)$'))
+    dispatcher.add_handler(CallbackQueryHandler(on_already_selected_button, pattern=r'^button:already_(solved|error):user(\d+)$'))
     dispatcher.add_handler(CallbackQueryHandler(on_button, pattern=r'^button:(.*):user(\d+)$'))
 
     updater.job_queue.run_repeating(cleanup_and_ban, interval=60, first=60)
