@@ -519,7 +519,7 @@ def cleanup_and_ban(context: CallbackContext):
                         chat_id,
                         f"{user_mention} non ha completato il test nei {config.captcha.timeout} minuti previsti, "
                         f"è stato/a bloccato/a, {captcha.get_correct_and_selected_count()} emoji corrette su "
-                        f"{captcha.correct_emojis_number} [#ban #u{captcha.user.id}]",
+                        f"{captcha.correct_emojis_threshold} [#ban #u{captcha.user.id}]",
                         parse_mode=ParseMode.HTML
                     )
                 except (TelegramError, BadRequest) as e:
