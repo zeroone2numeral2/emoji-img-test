@@ -170,6 +170,7 @@ class EmojiCaptcha:
             self,
             user: User,
             chat: Chat,
+            service_message_id: int,
             correct_emojis_number: int,  # number of emojis in the image (that are marked as correct in the keyboard)
             correct_emojis_threshold: Optional[int] = None,  # minimum number of correct emojis to select to pass the captcha
             number_of_buttons: int = 8,  # number of keyboard buttons
@@ -198,6 +199,7 @@ class EmojiCaptcha:
         self.number_of_buttons = number_of_buttons
         self.errors = 0
         self.allowed_errors = allowed_errors
+        self.service_message_id = service_message_id
 
         now = utilities.now_utc()
         self.created_on = now
@@ -285,7 +287,7 @@ class EmojiCaptcha:
 
 @fail_with_message()
 def on_forced_captcha_command(update: Update, context: CallbackContext):
-    logger.debug("forced captcha for %d", update.effective_user.id)
+    logger.debug("forced captcha for %d (%d)", update.effective_user.id, update.message.message_id)
 
     return on_new_member(update, context)
 
@@ -355,6 +357,7 @@ def on_new_member(update: Update, context: CallbackContext):
     captcha = EmojiCaptcha(
         update.effective_user,
         update.effective_chat,
+        service_message_id=update.message.message_id,
         correct_emojis_number=config.captcha.image_emojis,
         correct_emojis_threshold=config.captcha.image_emojis_correct_threshold,
         number_of_buttons=config.captcha.image_buttons,
@@ -422,7 +425,11 @@ def on_button(update: Update, context: CallbackContext, captcha: EmojiCaptcha):
         else:
             logger.debug("captcha completed, cleaning up and lifting restrictions...")
             context.chat_data.pop(update.effective_user.id, None)
+
             utilities.safe_delete(update.callback_query.message)
+            if config.captcha.delete_service_message:
+                utilities.safe_delete_by_id(context.bot, update.effective_chat.id, captcha.service_message_id)
+
             run_and_log(
                 context.bot.restrict_chat_member,
                 update.effective_chat.id,
@@ -435,7 +442,10 @@ def on_button(update: Update, context: CallbackContext, captcha: EmojiCaptcha):
         if errors > captcha.allowed_errors:
             logger.debug("captcha failed, cleaning up...")
             context.chat_data.pop(update.effective_user.id, None)
+
             utilities.safe_delete(update.callback_query.message)
+            if config.captcha.delete_service_message:
+                utilities.safe_delete_by_id(context.bot, update.effective_chat.id, captcha.service_message_id)
 
             if config.captcha.send_message_on_fail:
                 user_mention = utilities.mention_escaped(update.effective_user)
@@ -491,10 +501,9 @@ def cleanup_and_ban(context: CallbackContext):
 
             logger.info("cleaning up user %d data from chat %d: diff of %d seconds", user_id, chat_id, diff_seconds)
 
-            try:
-                context.bot.delete_message(chat_id, captcha.message_id)
-            except (TelegramError, BadRequest) as e:
-                logger.error("error while deleting message: %s", str(e))
+            utilities.safe_delete_by_id(context.bot, chat_id, captcha.message_id, log_error=True)
+            if config.captcha.delete_service_message:
+                utilities.safe_delete_by_id(context.bot, chat_id, captcha.service_message_id)
 
             ban_success = False
             try:
