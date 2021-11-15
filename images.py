@@ -14,15 +14,22 @@ logger_geom = logging.getLogger("geometry")
 
 
 def gen_offsets_grid(img_width: int, img_height: int, number_of_emojis: int, cell_padding: int = 10):
-    grid_x, grid_y = 1, 1
+    # side_1 is always equal or greater than side_2
+    side_1, side_2 = 1, 1
     while True:
-        if grid_x * grid_y >= number_of_emojis:
+        if side_1 * side_2 >= number_of_emojis:
             break
         else:
-            if grid_x <= grid_y:
-                grid_x += 1
+            if side_1 <= side_2:
+                # side_1 should always be equal or greater than side_2
+                side_1 += 1
             else:
-                grid_y += 1
+                side_2 += 1
+
+    if img_width >= img_height:
+        grid_x, grid_y = side_1, side_2
+    else:
+        grid_y, grid_x = side_1, side_2
 
     logger_geom.debug(f"grid size for {number_of_emojis} emojis: {grid_x}x{grid_y}")
 
@@ -51,7 +58,7 @@ def gen_offsets_grid(img_width: int, img_height: int, number_of_emojis: int, cel
 
 
 class CaptchaImage:
-    def __init__(self, background_path, emojis=List[EmojiButton], scale_factor=0, max_side=0):
+    def __init__(self, background_path, emojis_list: List[EmojiButton], scale_factor=0, max_side=0):
         self.bg_img = Image.open(background_path, 'r').convert('RGBA')
 
         resize_to = None
@@ -77,11 +84,11 @@ class CaptchaImage:
         self.png_files_path = []
         self.result_file_path = None
 
-        for emoji in emojis:
+        for emoji in emojis_list:
             png_image_path = Path("emojis/") / emoji.file_name
             self.png_files_path.append(png_image_path)
 
-        self.number_of_emojis = len(emojis)
+        self.number_of_emojis = len(emojis_list)
 
     def generate_capctha_image(self, file_path):
         bg_w, bg_h = self.bg_img.size

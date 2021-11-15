@@ -8,7 +8,7 @@ import re
 from functools import wraps
 from pathlib import Path
 from random import choice
-from typing import List, Callable
+from typing import List, Callable, Optional
 
 from telegram import Update, TelegramError, Chat, ParseMode, Bot, BotCommandScopeAllPrivateChats, BotCommand, User, \
     InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions, BotCommandScopeAllChatAdministrators
@@ -162,21 +162,39 @@ def run_and_log(func: Callable, *args, **kwargs):
 
 
 class EmojiCaptcha:
+    MIN_BUTTONS = 2
+    MIN_CORRECT_EMOJIS = 1
+    MAX_SINGLE_ROW_EMOJIS = 4
+
     def __init__(
             self,
             user: User,
             chat: Chat,
-            number_of_correct_emojis: int,  # number of emojis in the image (that are marked as correct in the keyboard)
+            correct_emojis_number: int,  # number of emojis in the image (that are marked as correct in the keyboard)
+            correct_emojis_threshold: Optional[int] = None,  # minimum number of correct emojis to select to pass the captcha
             number_of_buttons: int = 8,  # number of keyboard buttons
             allowed_errors: int = 2  # number of errors the user is allowed to do
     ):
-        if number_of_buttons % 2 != 0:
-            raise ValueError("the number of buttons must be even")
+        if number_of_buttons < self.MIN_BUTTONS:
+            raise ValueError(f"the captcha must have at least {self.MIN_BUTTONS} buttons")
+
+        if correct_emojis_number < 1:
+            raise ValueError(f"there must be at least {self.MIN_CORRECT_EMOJIS} correct emoji")
+
+        if number_of_buttons > self.MAX_SINGLE_ROW_EMOJIS and number_of_buttons % 2 != 0:
+            raise ValueError(f"the number of buttons must be even, or lower than {self.MAX_SINGLE_ROW_EMOJIS + 1}")
+
+        if number_of_buttons <= correct_emojis_number:
+            raise ValueError(f"the number of buttons ({number_of_buttons}) must be greater than the number of correct emojis ({correct_emojis_number})")
+
+        if correct_emojis_threshold and correct_emojis_threshold > correct_emojis_number:
+            raise ValueError(f"the number of correct emojis to pass the test ({correct_emojis_threshold}) cannot be greater than the number of emojis on the image ({correct_emojis_number})")
 
         self.user = user
         self.chat_id = chat.id
         self.message_id = None  # captcha message_id
-        self.number_of_correct_emojis = number_of_correct_emojis
+        self.correct_emojis_number = correct_emojis_number
+        self.correct_emojis_threshold = correct_emojis_threshold or self.correct_emojis_number
         self.number_of_buttons = number_of_buttons
         self.errors = 0
         self.allowed_errors = allowed_errors
@@ -194,8 +212,8 @@ class EmojiCaptcha:
 
         self.emojis = [EmojiButton.convert(e) for e in random_emojis]
 
-        for i in range(self.number_of_correct_emojis):
-            # mark the first emojis as correct, then we will shuffle the list
+        for i in range(self.correct_emojis_number):
+            # mark the first emojis as correct, we will shuffle the list later
             self.emojis[i].correct = True
 
         random.shuffle(self.emojis)
@@ -204,9 +222,12 @@ class EmojiCaptcha:
         if not self.emojis:
             self.gen_emojis()
 
+        if self.number_of_buttons <= self.MAX_SINGLE_ROW_EMOJIS:
+            rows = 1
+
         keyboard = []
         # max two lines of emojis
-        buttons_per_row = int(self.number_of_buttons / rows)
+        buttons_per_row = self.number_of_buttons if self.number_of_buttons <= self.MAX_SINGLE_ROW_EMOJIS else int(self.number_of_buttons / rows)
         i = 0
         for row_number in range(rows):
             buttons_row = []
@@ -234,7 +255,10 @@ class EmojiCaptcha:
     def get_correct_and_selected_count(self):
         return len([e for e in self.emojis if e.correct and e.already_selected])
 
-    def correct_answers(self):
+    def get_still_to_guess(self):
+        return self.correct_emojis_threshold - self.correct_answers_count()
+
+    def correct_answers_count(self):
         return sum(e.already_selected and e.correct for e in self.emojis)
 
     def get_emoji(self, emoji_id):
@@ -331,23 +355,26 @@ def on_new_member(update: Update, context: CallbackContext):
     captcha = EmojiCaptcha(
         update.effective_user,
         update.effective_chat,
-        number_of_correct_emojis=config.captcha.image_emojis,
-        number_of_buttons=10,
+        correct_emojis_number=config.captcha.image_emojis,
+        correct_emojis_threshold=config.captcha.image_emojis_correct_threshold,
+        number_of_buttons=config.captcha.image_buttons,
         allowed_errors=config.captcha.allowed_errors
     )
 
     captcha_image = CaptchaImage(
         background_path=get_background_path(update.effective_chat.id, config.captcha.image_path),
-        emojis=captcha.get_correct_emojis(),
+        emojis_list=captcha.get_correct_emojis(),
         max_side=config.captcha.image_max_side,
         scale_factor=config.captcha.image_scale_factor
     )
     file_path = f"tmp/{update.effective_chat.id}_{update.message.message_id}.png"
     captcha_image.generate_capctha_image(file_path)
 
+    caption_emojis_to_select = captcha.correct_emojis_threshold if captcha.correct_emojis_threshold > 1 else "una"
     caption = f"Ciao {utilities.mention_escaped(update.effective_user)}, benvenuto/a!" \
               f"\nPer poter parlare in questa chat, <b>devi dimostrare di non essere un bot!</b> " \
-              f"Seleziona le emoji che vedi nell'immagine utilizzando i tasti qui sotto." \
+              f"Seleziona {caption_emojis_to_select} delle emoji che vedi nell'immagine utilizzando i " \
+              f"tasti qui sotto." \
               f"\nTi sono concessi {captcha.remaining_attempts()} errori e {config.captcha.timeout} minuti di tempo"
 
     with open(file_path, "rb") as f:
@@ -385,7 +412,7 @@ def on_button(update: Update, context: CallbackContext, captcha: EmojiCaptcha):
 
     new_caption = ""
     if emoji.correct:
-        still_to_guess = captcha.number_of_correct_emojis - captcha.correct_answers()
+        still_to_guess = captcha.get_still_to_guess()
         if still_to_guess != 0:
             if still_to_guess == 1:
                 alert_text = f"Ottimo lavoro! Ne rimane ancora una"
@@ -483,7 +510,7 @@ def cleanup_and_ban(context: CallbackContext):
                         chat_id,
                         f"{user_mention} non ha completato il test nei {config.captcha.timeout} minuti previsti, "
                         f"è stato/a bloccato/a, {captcha.get_correct_and_selected_count()} emoji corrette su "
-                        f"{captcha.number_of_correct_emojis} [#ban #u{captcha.user.id}]",
+                        f"{captcha.correct_emojis_number} [#ban #u{captcha.user.id}]",
                         parse_mode=ParseMode.HTML
                     )
                 except (TelegramError, BadRequest) as e:
