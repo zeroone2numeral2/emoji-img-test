@@ -353,6 +353,12 @@ def on_new_member(update: Update, context: CallbackContext):
     if update.effective_user.id not in get_admin_ids(context.bot, update.effective_chat.id):
         # testing: do not restrict if the user is an admin
         update.effective_chat.restrict_member(update.effective_user.id, permissions=StandardPermission.MUTED)
+        if config.captcha.log_chat:
+            context.bot.send_message(
+                config.captcha.log_chat,
+                f"{utilities.mention_escaped(update.effective_user)} si è unito [#u{update.effective_user.id}]",
+                parse_mode=ParseMode.HTML
+            )
 
     captcha = EmojiCaptcha(
         update.effective_user,
