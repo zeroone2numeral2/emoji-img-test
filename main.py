@@ -448,9 +448,10 @@ def on_button(update: Update, context: CallbackContext, captcha: EmojiCaptcha):
                 utilities.safe_delete_by_id(context.bot, update.effective_chat.id, captcha.service_message_id)
 
             if config.captcha.send_message_on_fail:
+                target_chat_id = config.captcha.log_chat or update.effective_chat.id
                 user_mention = utilities.mention_escaped(update.effective_user)
                 context.bot.send_message(
-                    update.effective_chat.id,
+                    target_chat_id,
                     f"{user_mention} non è riuscito/a a verificarsi a causa dei troppi errori ({errors}), "
                     f"è ancora membro di questo gruppo ma non portà parlare [#mute #u{update.effective_user.id}]",
                     parse_mode=ParseMode.HTML
@@ -513,10 +514,11 @@ def cleanup_and_ban(context: CallbackContext):
                 logger.error("error while banning user: %s", str(e))
 
             if ban_success and config.captcha.send_message_on_fail:
+                target_chat_id = config.captcha.log_chat or chat_id
                 try:
                     user_mention = utilities.mention_escaped(captcha.user)
                     context.bot.send_message(
-                        chat_id,
+                        target_chat_id,
                         f"{user_mention} non ha completato il test nei {config.captcha.timeout} minuti previsti, "
                         f"è stato/a bloccato/a, {captcha.get_correct_and_selected_count()} emoji corrette su "
                         f"{captcha.correct_emojis_threshold} [#ban #u{captcha.user.id}]",

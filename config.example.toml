@@ -13,4 +13,5 @@ image_buttons = 6 # how many buttons the image should have
 allowed_errors = 2 # mistakes an user can do while solving a captcha (allowed_errors + 1 -> test failed)
 timeout = 20 # after how long to ban people with a pending capctha (in minutes)
 send_message_on_fail = true # send a message if the user fails the captcha, or the timeout expires
+log_chat = 0 # chat where to post messages if 'send_message_on_fail' is enabled (0: group)
 delete_service_message = true # delete the service message when the captcha is solved/failed/expired
