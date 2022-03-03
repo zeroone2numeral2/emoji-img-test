@@ -25,7 +25,7 @@ from config import config
 emojis = Emojis(max_codepoints=1)
 updater = Updater(
     config.telegram.token,
-    workers=1,
+    workers=0,
     persistence=None,  # disable persistence for now
 )
 
